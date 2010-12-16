@@ -111,7 +111,7 @@ src_unpack() {
 
 	# fix tuner selection on channel change in live-tv
 	# not a complete fix, but a start
-	epatch "${FILESDIR}"/fix-live-tv.diff
+	epatch "${FILESDIR}"/6948-v2.diff
 
 }
 
