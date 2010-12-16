@@ -1,0 +1,735 @@
+Index: libs/libmythtv/dbchannelinfo.cpp
+===================================================================
+--- libs/libmythtv/dbchannelinfo.cpp	(revision 27353)
++++ libs/libmythtv/dbchannelinfo.cpp	(working copy)
+@@ -24,32 +24,33 @@
+     const QString &_channum, const QString &_callsign,
+     uint _chanid, uint _major_chan, uint _minor_chan,
+     uint _mplexid, bool _visible,
+-    const QString &_name, const QString &_icon) :
++    const QString &_name, const QString &_icon,
++    uint _sourceid, uint _cardid, uint _grpid) :
+     channum(_channum),
+-    callsign(_callsign), chanid(_chanid),
++    callsign(_callsign),
++    name(_name), icon((_icon == "none") ? QString() : _icon),
++    chanid(_chanid),
+     major_chan(_major_chan), minor_chan(_minor_chan),
+-    mplexid(_mplexid), visible(_visible),
+-    name(_name), icon(_icon)
++    mplexid((_mplexid == 32767) ? 0 : _mplexid),
++    sourceid(_sourceid), cardid(_cardid), grpid(_grpid),
++    visible(_visible)
+ {
+-    channum.detach();
+-    callsign.detach();
+-    name.detach();
+-    icon.detach();
+-    mplexid = (mplexid == 32767) ? 0 : mplexid;
+-    icon = (icon == "none") ? QString::null : icon;
+ }
+ 
+ DBChannel &DBChannel::operator=(const DBChannel &other)
+ {
+-    channum    = other.channum;  channum.detach();
+-    callsign   = other.callsign; callsign.detach();
++    channum    = other.channum;
++    callsign   = other.callsign;
++    name       = other.name;
++    icon       = other.icon;
+     chanid     = other.chanid;
+     major_chan = other.major_chan;
+     minor_chan = other.minor_chan;
+     mplexid    = (other.mplexid == 32767) ? 0 : other.mplexid;
++    sourceid   = other.sourceid;
++    cardid     = other.cardid;
++    grpid      = other.grpid;
+     visible    = other.visible;
+-    name       = other.name; name.detach();
+-    icon       = other.icon; icon.detach();
+ 
+     return *this;
+ }
+Index: libs/libmythtv/channelutil.h
+===================================================================
+--- libs/libmythtv/channelutil.h	(revision 27353)
++++ libs/libmythtv/channelutil.h	(working copy)
+@@ -148,18 +148,20 @@
+     static QString GetVideoFilters(uint sourceid, const QString &channum)
+         { return GetChannelValueStr("videofilters", sourceid, channum); }
+ 
+-    static DBChanList GetChannels(uint srcid, bool vis_only, 
+-                                  QString grp = "", int changrpid = -1);
++    static DBChanList GetChannels(
++        uint sourceid, bool visible_only, 
++        QString group_by = "", uint channel_groupid = 0);
+     static vector<uint> GetChanIDs(int sourceid = -1);
+     static uint    GetChannelCount(int sourceid = -1);
+     static void    SortChannels(DBChanList &list, const QString &order,
+                                 bool eliminate_duplicates = false);
+-    static void    EliminateDuplicateChanNum(DBChanList &list);
+ 
+-    static uint    GetNextChannel(const DBChanList  &sorted,
+-                                  uint               old_chanid,
+-                                  uint               mplexid_restriction,
+-                                  int                direction);
++    static uint    GetNextChannel(const DBChanList &sorted,
++                                  uint old_chanid,
++                                  uint mplexid_restriction,
++                                  int  direction,
++                                  bool skip_non_visible = true,
++                                  bool skip_same_channum_and_callsign = false);
+ 
+     static QString GetChannelValueStr(const QString &channel_field,
+                                       uint           sourceid,
+Index: libs/libmythtv/dbchannelinfo.h
+===================================================================
+--- libs/libmythtv/dbchannelinfo.h	(revision 27353)
++++ libs/libmythtv/dbchannelinfo.h	(working copy)
+@@ -25,7 +25,8 @@
+     DBChannel(const QString &_channum, const QString &_callsign,
+               uint _chanid, uint _major_chan, uint _minor_chan,
+               uint _mplexid, bool _visible,
+-              const QString &_name, const QString &_icon);
++              const QString &_name, const QString &_icon,
++              uint _sourceid, uint _cardid, uint _grpid);
+     DBChannel& operator=(const DBChannel&);
+ 
+     bool operator == (uint _chanid) const
+@@ -34,13 +35,16 @@
+   public:
+     QString channum;
+     QString callsign;
++    QString name;
++    QString icon;
+     uint    chanid;
+     uint    major_chan;
+     uint    minor_chan;
+     uint    mplexid;
++    uint    sourceid;
++    uint    cardid;
++    uint    grpid;
+     bool    visible;
+-    QString name;
+-    QString icon;
+ };
+ typedef vector<DBChannel> DBChanList;
+ 
+Index: libs/libmythtv/dbcheck.cpp
+===================================================================
+--- libs/libmythtv/dbcheck.cpp	(revision 27353)
++++ libs/libmythtv/dbcheck.cpp	(working copy)
+@@ -20,7 +20,7 @@
+    mythtv/bindings/perl/MythTV.pm
+ */
+ /// This is the DB schema version expected by the running MythTV instance.
+-const QString currentDatabaseVersion = "1264";
++const QString currentDatabaseVersion = "1265";
+ 
+ static bool UpdateDBVersionNumber(const QString &newnumber, QString &dbver);
+ static bool performActualUpdate(
+@@ -5502,6 +5502,30 @@
+             return false;
+     }
+ 
++    if (dbver == "1264")
++    {
++        const char *updates[] = {
++"INSERT INTO profilegroups SET name = 'ASI Recorder (DVEO)', cardtype = 'ASI', is_default = 1;",
++"INSERT INTO recordingprofiles SET name = \"Default\", profilegroup = 14;",
++"INSERT INTO recordingprofiles SET name = \"Live TV\", profilegroup = 14;",
++"INSERT INTO recordingprofiles SET name = \"High Quality\", profilegroup = 14;",
++"INSERT INTO recordingprofiles SET name = \"Low Quality\", profilegroup = 14;",
++"INSERT INTO profilegroups SET name = 'OCUR Recorder (CableLabs)', cardtype = 'OCUR', is_default = 1;",
++"INSERT INTO recordingprofiles SET name = \"Default\", profilegroup = 15;",
++"INSERT INTO recordingprofiles SET name = \"Live TV\", profilegroup = 15;",
++"INSERT INTO recordingprofiles SET name = \"High Quality\", profilegroup = 15;",
++"INSERT INTO recordingprofiles SET name = \"Low Quality\", profilegroup = 15;",
++"INSERT INTO profilegroups SET name = 'BDA Recorder (Microsoft)', cardtype = 'BDA', is_default = 1;",
++"INSERT INTO recordingprofiles SET name = \"Default\", profilegroup = 16;",
++"INSERT INTO recordingprofiles SET name = \"Live TV\", profilegroup = 16;",
++"INSERT INTO recordingprofiles SET name = \"High Quality\", profilegroup = 16;",
++"INSERT INTO recordingprofiles SET name = \"Low Quality\", profilegroup = 16;",
++NULL
++};
++        if (!performActualUpdate(updates, "1265", dbver))
++            return false;
++    }
++
+     return true;
+ }
+ 
+Index: libs/libmythtv/channelbase.cpp
+===================================================================
+--- libs/libmythtv/channelbase.cpp	(revision 27353)
++++ libs/libmythtv/channelbase.cpp	(working copy)
+@@ -840,8 +840,7 @@
+         m_allchannels.insert(m_allchannels.end(),
+                            channels.begin(), channels.end());
+     }
+-    ChannelUtil::SortChannels(m_allchannels, order);
+-    ChannelUtil::EliminateDuplicateChanNum(m_allchannels);
++    ChannelUtil::SortChannels(m_allchannels, order, true);
+ 
+     m_currentInputID = GetDefaultInput(cardid);
+ 
+Index: libs/libmythtv/tvbrowsehelper.h
+===================================================================
+--- libs/libmythtv/tvbrowsehelper.h	(revision 27353)
++++ libs/libmythtv/tvbrowsehelper.h	(working copy)
+@@ -4,8 +4,10 @@
+ #define _TV_BROWSE_HELPER_H_
+ 
+ #include <QWaitCondition>
++#include <QMultiMap>
+ #include <QThread>
+ #include <QString>
++#include <QHash>
+ 
+ #include "dbchannelinfo.h" // for DBChanList
+ #include "programtypes.h"  // for InfoMap
+@@ -19,22 +21,43 @@
+ {
+   public:
+     BrowseInfo(BrowseDirection dir) :
+-        m_dir(dir), m_chanid(0)
++        m_dir(dir), m_chanid(0), m_sourceid(0)
+     {
+     }
+     BrowseInfo(BrowseDirection dir,
+                const QString &channum,
+                uint           chanid,
+                const QString &starttime) :
+-        m_dir(dir),  m_channum(channum),
+-        m_chanid(0), m_starttime(starttime)
++        m_dir(dir),         m_channum(channum),
++        m_chanid(chanid),   m_starttime(starttime),
++        m_sourceid(0)
+     {
+     }
++    BrowseInfo(const QString &channum,
++               uint           sourceid) :
++        m_dir(BROWSE_SAME), m_channum(channum),
++        m_chanid(0),        m_sourceid(sourceid)
++    {
++    }
+ 
++    QString toString() const
++    {
++        return QString("%1;%2;%3;%4;%5")
++            .arg(BROWSE_SAME==m_dir?"SAME":
++                 BROWSE_UP  ==m_dir?"UP":
++                 BROWSE_DOWN==m_dir?"DOWN":
++                 QString::number(m_dir))
++            .arg(m_channum)
++            .arg(m_chanid)
++            .arg(m_starttime)
++            .arg(m_sourceid);
++    }
++
+     BrowseDirection m_dir;
+     QString         m_channum;
+     uint            m_chanid;
+     QString         m_starttime;
++    uint            m_sourceid;
+ };
+ 
+ 
+@@ -82,15 +105,12 @@
+             BrowseDispInfo(ctx, bi);
+     }
+ 
+-    void BrowseChannel(PlayerContext *ctx, const QString &channum)
+-    {
+-        BrowseInfo bi(BROWSE_SAME, channum, 0, "");
+-        BrowseDispInfo(ctx, bi);
+-    }
++    void BrowseChannel(PlayerContext *ctx, const QString &channum);
+ 
+     BrowseInfo GetBrowsedInfo(void) const;
+     bool IsBrowsing(void) const;
+-    uint BrowseAllGetChanId(const QString &channum) const;
++    uint GetChanId(const QString &channum,
++                   uint pref_cardid, uint pref_sourceid) const;
+ 
+   protected:
+     void GetNextProgram(BrowseDirection direction, InfoMap &infoMap) const;
+@@ -99,12 +119,15 @@
+     virtual void run();
+ 
+     TV               *m_tv;
+-    DBChanList        db_browse_all_channels;
++    DBChanList        db_all_channels;
++    DBChanList        db_all_visible_channels;
+     QString           db_time_format;
+     QString           db_short_date_format;
+     uint              db_browse_max_forward;
+     bool              db_browse_all_tuners;
+     bool              db_use_channel_groups;
++    QHash<uint,QString>     db_chanid_to_channum;
++    QMultiMap<QString,uint> db_channum_to_chanids;
+ 
+     mutable QMutex    m_lock; // protects variables below
+     PlayerContext    *m_ctx;
+Index: libs/libmythtv/tvbrowsehelper.cpp
+===================================================================
+--- libs/libmythtv/tvbrowsehelper.cpp	(revision 27353)
++++ libs/libmythtv/tvbrowsehelper.cpp	(working copy)
+@@ -6,8 +6,13 @@
+ #include "playercontext.h"
+ #include "remoteencoder.h"
+ #include "recordinginfo.h"
++#include "cardutil.h"
+ #include "tv_play.h"
+ 
++#define LOC      QString("BH: ")
++#define LOC_WARN QString("BH Warning: ")
++#define LOC_ERR  QString("BH Error: ")
++
+ #define GetPlayer(X,Y) GetPlayerHaveLock(X, Y, __FILE__ , __LINE__)
+ #define GetOSDLock(X) GetOSDL(X, __FILE__, __LINE__)
+ 
+@@ -39,14 +44,23 @@
+     m_chanid(0),
+     m_run(true)
+ {
+-    if (db_browse_all_tuners)
++    db_all_channels = ChannelUtil::GetChannels(
++        0, true, "channum, callsign");
++    ChannelUtil::SortChannels(
++        db_all_channels, db_channel_ordering, false);
++
++    DBChanList::const_iterator it = db_all_channels.begin();
++    for (; it != db_all_channels.end(); ++it)
+     {
+-        db_browse_all_channels = ChannelUtil::GetChannels(
+-            0, true, "channum, callsign");
+-        ChannelUtil::SortChannels(
+-            db_browse_all_channels, db_channel_ordering, true);
++        db_chanid_to_channum[(*it).chanid] = (*it).channum;
++        db_channum_to_chanids.insert((*it).channum,(*it).chanid);
+     }
+ 
++    db_all_visible_channels = ChannelUtil::GetChannels(
++        0, true, "channum, callsign");
++    ChannelUtil::SortChannels(
++        db_all_visible_channels, db_channel_ordering, false);
++
+     start();
+ }
+ 
+@@ -55,7 +69,8 @@
+ /// \note This may only be called from the UI thread.
+ bool TVBrowseHelper::BrowseStart(PlayerContext *ctx, bool skip_browse)
+ {
+-    VERBOSE(VB_IMPORTANT, "BrowseStart()");
++    VERBOSE(VB_IMPORTANT, QString("BrowseStart(%1skip)")
++            .arg(skip_browse?"":"no "));
+ 
+     if (!gCoreContext->IsUIThread())
+         return false;
+@@ -73,15 +88,15 @@
+     ctx->LockPlayingInfo(__FILE__, __LINE__);
+     if (ctx->playingInfo)
+     {
+-        m_ctx = ctx;
+-        BrowseInfo bi(BROWSE_SAME,
+-                      ctx->playingInfo->GetChanNum(),
+-                      ctx->playingInfo->GetChanID(),
+-                      ctx->playingInfo->GetScheduledStartTime(ISODate));
++        m_ctx       = ctx;
++        m_channum   = ctx->playingInfo->GetChanNum();
++        m_chanid    = ctx->playingInfo->GetChanID();
++        m_starttime = ctx->playingInfo->GetScheduledStartTime(ISODate);
+         ctx->UnlockPlayingInfo(__FILE__, __LINE__);
+ 
+         if (!skip_browse)
+         {
++            BrowseInfo bi(BROWSE_SAME, m_channum, m_chanid, m_starttime);
+             locker.unlock();
+             BrowseDispInfo(ctx, bi);
+         }
+@@ -140,7 +155,8 @@
+ 
+ void TVBrowseHelper::BrowseDispInfo(PlayerContext *ctx, BrowseInfo &bi)
+ {
+-    VERBOSE(VB_IMPORTANT, "BrowseDispInfo()");
++    VERBOSE(VB_IMPORTANT, QString("BrowseDispInfo(..%1)")
++            .arg(bi.toString()));
+ 
+     if (!gCoreContext->IsUIThread())
+         return;
+@@ -165,6 +181,33 @@
+     m_wait.wakeAll();
+ }
+ 
++void TVBrowseHelper::BrowseChannel(PlayerContext *ctx, const QString &channum)
++{
++    VERBOSE(VB_IMPORTANT, QString("BrowseChannel(.. %1)").arg(channum));
++
++    if (!gCoreContext->IsUIThread())
++        return;
++
++    if (db_browse_all_tuners)
++    {
++        BrowseInfo bi(channum, 0);
++        BrowseDispInfo(ctx, bi);
++        return;
++    }
++
++    if (!ctx->recorder || !ctx->last_cardid)
++        return;
++
++    QString inputname = ctx->recorder->GetInput();
++    uint    inputid   = CardUtil::GetInputID(ctx->last_cardid, inputname);
++    uint    sourceid  = CardUtil::GetSourceID(inputid);
++    if (sourceid)
++    {
++        BrowseInfo bi(channum, sourceid);
++        BrowseDispInfo(ctx, bi);
++    }
++}
++
+ BrowseInfo TVBrowseHelper::GetBrowsedInfo(void) const
+ {
+     QMutexLocker locker(&m_lock);
+@@ -189,15 +232,46 @@
+     return m_ctx != NULL;
+ }
+ 
+-/// Returns chanid of random channel with with matching channum
+-uint TVBrowseHelper::BrowseAllGetChanId(const QString &channum) const
++/** \brief Returns a chanid for the channum, or 0 if none is available.
++ *
++ *  This will prefer a given sourceid first, and then a given card id,
++ *  but if one or the other can not be satisfied but db_browse_all_tuners
++ *  is set then it will look to see if the chanid is available on any
++ *  tuner.
++ */
++uint TVBrowseHelper::GetChanId(
++    const QString &channum, uint pref_cardid, uint pref_sourceid) const
+ {
+-    DBChanList::const_iterator it = db_browse_all_channels.begin();
+-    for (; it != db_browse_all_channels.end(); ++it)
++    if (pref_sourceid)
+     {
+-        if ((*it).channum == channum)
+-            return (*it).chanid;
++        DBChanList::const_iterator it = db_all_channels.begin();
++        for (; it != db_all_channels.end(); ++it)
++        {
++            if ((*it).sourceid == pref_sourceid && (*it).channum == channum)
++                return (*it).chanid;
++        }
+     }
++
++    if (pref_cardid)
++    {
++        DBChanList::const_iterator it = db_all_channels.begin();
++        for (; it != db_all_channels.end(); ++it)
++        {
++            if ((*it).cardid == pref_cardid && (*it).channum == channum)
++                return (*it).chanid;
++        }
++    }
++
++    if (db_browse_all_tuners)
++    {
++        DBChanList::const_iterator it = db_all_channels.begin();
++        for (; it != db_all_channels.end(); ++it)
++        {
++            if ((*it).channum == channum)
++                return (*it).chanid;
++        }
++    }
++
+     return 0;
+ }
+ 
+@@ -273,7 +347,11 @@
+ {
+     uint chanid = infoMap["chanid"].toUInt();
+     if (!chanid)
+-        chanid = BrowseAllGetChanId(infoMap["channum"]);
++    {
++        VERBOSE(VB_IMPORTANT, LOC_ERR +
++                "GetNextProgramDB() requires a chanid");
++        return;
++    }
+ 
+     int chandir = -1;
+     switch (direction)
+@@ -282,26 +360,16 @@
+         case BROWSE_DOWN:     chandir = CHANNEL_DIRECTION_DOWN;     break;
+         case BROWSE_FAVORITE: chandir = CHANNEL_DIRECTION_FAVORITE; break;
+     }
+-    if (direction != BROWSE_INVALID)
++    if (chandir != -1)
+     {
+         chanid = ChannelUtil::GetNextChannel(
+-            db_browse_all_channels, chanid, 0, chandir);
++            db_all_visible_channels, chanid, 0 /*mplexid_restriction*/,
++            chandir, true /*skip non visible*/, true /*skip same callsign*/);
+     }
+ 
+-    infoMap["chanid"] = QString::number(chanid);
++    infoMap["chanid"]  = QString::number(chanid);
++    infoMap["channum"] = db_chanid_to_channum[chanid];
+ 
+-    DBChanList::const_iterator it = db_browse_all_channels.begin();
+-    for (; it != db_browse_all_channels.end(); ++it)
+-    {
+-        if ((*it).chanid == chanid)
+-        {
+-            QString tmp = (*it).channum;
+-            tmp.detach();
+-            infoMap["channum"] = tmp;
+-            break;
+-        }
+-    }
+-
+     QDateTime nowtime = QDateTime::currentDateTime();
+     QDateTime latesttime = nowtime.addSecs(6*60*60);
+     QDateTime browsetime = QDateTime::fromString(
+@@ -364,11 +432,19 @@
+ 
+         PlayerContext *ctx = m_ctx;
+ 
++        vector<uint> chanids;
+         if (BROWSE_SAME == bi.m_dir)
+         {
+             m_channum   = bi.m_channum;
+             m_chanid    = bi.m_chanid;
+             m_starttime = bi.m_starttime;
++            if (!m_chanid)
++            {
++
++            // TODO When channum is given and not chanid,
++            // we want to check all channels available to
++            // us with that channum..
++            }
+         }
+ 
+         BrowseDirection direction = bi.m_dir;
+@@ -438,9 +514,11 @@
+             }
+             else
+             {
++                // TODO handle browse_same... 
++                uint orig_chanid = infoMap["chanid"].toUInt();
+                 GetNextProgramDB(direction, infoMap);
+                 while (!m_tv->IsTunable(ctx, infoMap["chanid"].toUInt()) &&
+-                       (infoMap["channum"] != m_channum))
++                       (infoMap["chanid"].toUInt() != orig_chanid))
+                 {
+                     GetNextProgramDB(direction, infoMap);
+                 }
+Index: libs/libmythtv/channelutil.cpp
+===================================================================
+--- libs/libmythtv/channelutil.cpp	(revision 27353)
++++ libs/libmythtv/channelutil.cpp	(working copy)
+@@ -1768,7 +1768,8 @@
+                            dvb_transportid, dvb_networkid, dtv_si_std);
+ }
+ 
+-DBChanList ChannelUtil::GetChannels(uint sourceid, bool vis_only, QString grp, int changrpid)
++DBChanList ChannelUtil::GetChannels(
++    uint sourceid, bool vis_only, QString grp, uint changrpid)
+ {
+     DBChanList list;
+ 
+@@ -1777,36 +1778,42 @@
+     QString qstr =
+         "SELECT channum, callsign, channel.chanid, "
+         "       atsc_major_chan, atsc_minor_chan, "
+-        "       name, icon, mplexid, visible "
+-        "FROM channel ";
++        "       name, icon, mplexid, visible, "
++        "       channel.sourceid, cardinput.cardid, channelgroup.grpid "
++        "FROM channel "
++        "LEFT JOIN channelgroup ON channel.chanid     = channelgroup.chanid "
++        "JOIN cardinput         ON cardinput.sourceid = channel.sourceid "
++        "JOIN capturecard       ON cardinput.cardid   = capturecard.cardid ";
+ 
+-    // Select only channels from the specified channel group
+-    if (changrpid > -1)
+-        qstr += QString(",channelgroup ");
++    QString cond = " WHERE ";
+ 
+     if (sourceid)
++    {
+         qstr += QString("WHERE sourceid='%1' ").arg(sourceid);
+-    else
+-        qstr += ",cardinput,capturecard "
+-            "WHERE cardinput.sourceid = channel.sourceid   AND "
+-            "      cardinput.cardid   = capturecard.cardid     ";
++        cond = " AND ";
++    }
+ 
+-    if (changrpid > -1)
++    // Select only channels from the specified channel group
++    if (changrpid > 0)
+     {
+-        qstr += QString("AND channel.chanid = channelgroup.chanid "
+-                        "AND channelgroup.grpid ='%1' ").arg(changrpid);
++        qstr += QString("%1 channelgroup.grpid = '%2' ")
++            .arg(cond).arg(changrpid);
++        cond = " AND ";
+     }
+ 
+     if (vis_only)
+-        qstr += "AND visible=1 ";
++    {
++        qstr += QString("%1 visible=1 ").arg(cond);
++        cond = " AND ";
++    }
+ 
+     if (!grp.isEmpty())
+-        qstr += QString("GROUP BY %1 ").arg(grp);
++        qstr += QString(" GROUP BY %1 ").arg(grp);
+ 
+     query.prepare(qstr);
+-    if (!query.exec() || !query.isActive())
++    if (!query.exec())
+     {
+-        MythDB::DBError("get channels -- sourceid", query);
++        MythDB::DBError("ChannelUtil::GetChannels()", query);
+         return list;
+     }
+ 
+@@ -1824,7 +1831,10 @@
+             query.value(7).toUInt(),                      /* mplexid    */
+             query.value(8).toBool(),                      /* visible    */
+             query.value(5).toString(),                    /* name       */
+-            query.value(6).toString());                   /* icon       */
++            query.value(6).toString(),                    /* icon       */
++            query.value(9).toUInt(),                      /* sourceid   */
++            query.value(11).toUInt(),                     /* cardid     */
++            query.value(10).toUInt());                    /* grpid      */
+ 
+         list.push_back(chan);
+     }
+@@ -1992,30 +2002,16 @@
+     }
+ }
+ 
+-void ChannelUtil::EliminateDuplicateChanNum(DBChanList &list)
+-{
+-    typedef std::set<QString> seen_set;
+-    seen_set seen;
+-
+-    DBChanList::iterator it = list.begin();
+-
+-    while (it != list.end())
+-    {
+-        QString tmp = it->channum; tmp.detach();
+-        std::pair<seen_set::iterator, bool> insret = seen.insert(tmp);
+-        if (insret.second)
+-            ++it;
+-        else
+-            it = list.erase(it);
+-    }
+-}
+-
+ uint ChannelUtil::GetNextChannel(
+     const DBChanList &sorted,
+     uint              old_chanid,
+     uint              mplexid_restriction,
+-    int               direction)
++    int               direction,
++    bool              skip_non_visible,
++    bool              skip_same_channum_and_callsign)
+ {
++    // TODO implement skip_same_channum_and_callsign
++
+     DBChanList::const_iterator it =
+         find(sorted.begin(), sorted.end(), old_chanid);
+ 
+@@ -2026,7 +2022,6 @@
+         return 0; // no channels..
+ 
+     DBChanList::const_iterator start = it;
+-    bool skip_non_visible = true; // TODO make DB selectable
+ 
+     if (CHANNEL_DIRECTION_DOWN == direction)
+     {
+Index: libs/libmythtv/tv_play.cpp
+===================================================================
+--- libs/libmythtv/tv_play.cpp	(revision 27353)
++++ libs/libmythtv/tv_play.cpp	(working copy)
+@@ -6916,16 +6916,20 @@
+         QString chaninput = GetQueuedInput();
+         if (browsehelper->IsBrowsing())
+         {
++            uint sourceid = 0;
++            ctx->LockPlayingInfo(__FILE__, __LINE__);
++            if (ctx->playingInfo)
++                sourceid = ctx->playingInfo->GetSourceID();
++            ctx->UnlockPlayingInfo(__FILE__, __LINE__);
++
+             commited = true;
+             if (channum.isEmpty())
+                 channum = browsehelper->GetBrowsedInfo().m_channum;
++            uint chanid = browsehelper->GetChanId(
++                channum, ctx->GetCardID(), sourceid);
++            if (chanid)
++                browsehelper->BrowseChannel(ctx, channum);
+ 
+-            if ((ctx->recorder && ctx->recorder->CheckChannel(channum)) ||
+-                (db_browse_all_tuners &&
+-                 browsehelper->BrowseAllGetChanId(channum)))
+-            {
+-                browsehelper->BrowseChannel(ctx, channum);
+-            }
+             HideOSDWindow(ctx, "osd_input");
+         }
+         else if (GetQueuedChanID() || !channum.isEmpty())
+@@ -6957,8 +6961,7 @@
+                 return;
+             }
+             // Collect channel info
+-            const ProgramInfo pginfo(*ctx->playingInfo);
+-            old_chanid = pginfo.GetChanID();
++            old_chanid = ctx->playingInfo->GetChanID();
+             ctx->UnlockPlayingInfo(__FILE__, __LINE__);
+         }
+ 
+Index: libs/libmythdb/mythversion.h
+===================================================================
+--- libs/libmythdb/mythversion.h	(revision 27353)
++++ libs/libmythdb/mythversion.h	(working copy)
+@@ -30,8 +30,8 @@
+  *       mythtv/bindings/python/MythTV/static.py (version number)
+  *       mythtv/bindings/python/MythTV/mythproto.py (layout)
+  */
+-#define MYTH_PROTO_VERSION "64"
+-#define MYTH_PROTO_TOKEN "8675309J"
++#define MYTH_PROTO_VERSION "63"
++#define MYTH_PROTO_TOKEN "3875641D"
+ 
+ MPUBLIC const char *GetMythSourceVersion();
+ 
+Index: programs/mythfrontend/guidegrid.cpp
+===================================================================
+--- programs/mythfrontend/guidegrid.cpp	(revision 27353)
++++ programs/mythfrontend/guidegrid.cpp	(working copy)
+@@ -172,7 +172,8 @@
+         changrpid = gCoreContext->GetNumSetting("ChannelGroupDefault", -1);
+ 
+     // check there are some channels setup
+-    DBChanList channels = ChannelUtil::GetChannels(0, true, "", changrpid);
++    DBChanList channels = ChannelUtil::GetChannels(
++        0, true, "", (changrpid<0) ? 0 : changrpid);
+     if (!channels.size())
+     {
+         QString message;
+@@ -835,7 +836,8 @@
+     m_channelInfoIdx.clear();
+     m_currentStartChannel = 0;
+ 
+-    DBChanList channels = ChannelUtil::GetChannels(0, true, "", m_changrpid);
++    DBChanList channels = ChannelUtil::GetChannels(
++        0, true, "", (m_changrpid < 0) ? 0 : m_changrpid);
+     ChannelUtil::SortChannels(channels, m_channelOrdering, false);
+ 
+     typedef vector<uint> uint_list_t;
