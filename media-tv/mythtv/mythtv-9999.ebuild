@@ -109,6 +109,10 @@ src_unpack() {
 	epatch "${FILESDIR}"/gentoo-myth-config-fix.diff
 	epatch "${FILESDIR}"/${PN}-0.22-sandbox.patch
 
+	# fix tuner selection on channel change in live-tv
+	# not a complete fix, but a start
+	epatch "${FILESDIR}"/6948-v2.patch
+
 }
 
 setup_pro() {
